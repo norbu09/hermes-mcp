@@ -124,18 +124,18 @@ end
 
 ## Implementation Plan
 
-### Phase 1: Core Server Implementation
+### Phase 1: Core Server Implementation ✅
 
-1. Define core behaviours (`Tool`, `Resource`, `Prompt`)
-2. Implement attribute parsing for metadata extraction
-3. Create server GenServer with supervision
-4. Implement basic message handling
+1. ✅ Define core behaviours (`Tool`, `Resource`, `Prompt`)
+2. ✅ Implement attribute parsing for metadata extraction
+3. ✅ Create server GenServer with supervision
+4. ✅ Implement basic message handling
 
-### Phase 2: Transport Layers
+### Phase 2: Transport Layers ✅
 
-1. Implement STDIO transport
-2. Implement HTTP/SSE transport
-3. Implement Streamable HTTP transport
+1. ✅ Implement STDIO transport
+2. ✅ Implement HTTP/SSE transport
+3. ✅ Implement Streamable HTTP transport
 
 ### Phase 3: Phoenix Integration
 
