@@ -90,7 +90,43 @@ defmodule Hermes.Server.Tool do
   @callback handle(params :: map(), context :: map()) ::
               {:ok, result :: any()} | {:error, reason :: String.t()}
               
-  @optional_callbacks [name: 0, description: 0, parameters: 0]
+  @doc """
+  Handles a streaming tool execution request.
+  
+  The params map contains the parameters passed by the client.
+  The context map contains information about the request context.
+  The progress_callback is a function that can be called to send progress updates to the client.
+  
+  This callback is optional and will only be called if the client requests streaming and the tool
+  implements this callback. If not implemented, the regular handle/2 callback will be used instead.
+  
+  The progress_callback function takes a map of progress information that will be sent to the client
+  as a JSON-RPC notification with method "progress".
+  
+  Example:
+  ```elixir
+  def handle_stream(params, context, progress_callback) do
+    # Start the long-running operation
+    progress_callback.(%{"status" => "started", "progress" => 0})
+    
+    # Perform the operation with progress updates
+    Enum.each(1..10, fn i ->
+      # Do some work...
+      :timer.sleep(1000)
+      
+      # Send a progress update
+      progress_callback.(%{"status" => "in_progress", "progress" => i * 10})
+    end)
+    
+    # Send the final result
+    {:ok, %{"result" => "Operation completed"}}
+  end
+  ```
+  """
+  @callback handle_stream(params :: map(), context :: map(), progress_callback :: (map() -> any())) ::
+              {:ok, result :: any()} | {:error, reason :: String.t()}
+              
+  @optional_callbacks [name: 0, description: 0, parameters: 0, handle_stream: 3]
   
   defmacro __using__(_opts) do
     quote do

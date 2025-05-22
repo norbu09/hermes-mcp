@@ -40,8 +40,7 @@ defmodule Hermes.Server do
   use GenServer
   require Logger
   
-  alias Hermes.MCP.{Message, Error, ID}
-  alias Hermes.Server.{Context, AttributeParser}
+  alias Hermes.Server.Context
   
   # Server state
   defstruct [
@@ -451,10 +450,26 @@ defmodule Hermes.Server do
   
   # Handle execute_tool request
   defp handle_execute_tool(tool_id, tool_params, context, state) do
+    # Check if this is a streaming request
+    is_streaming = get_in(context.custom_data, [:streaming]) == true
+    _client_id = get_in(context.custom_data, [:client_id])
+    
     if state.handler_module do
+      # Use the handler module if available
       case state.handler_module.execute_tool(context, tool_id, tool_params, state.handler_state) do
         {:reply, result, new_handler_state} ->
           {:reply, result, %{state | handler_state: new_handler_state}}
+        {:stream, stream_fn, new_handler_state} when is_streaming and is_function(stream_fn) ->
+          # Handle streaming response with the provided stream function
+          Task.start(fn ->
+            stream_fn.(fn progress ->
+              # Send progress updates through the connection
+              send(context.connection_pid, {:send_progress, progress})
+            end)
+          end)
+          
+          # Return an immediate response indicating streaming has started
+          {:reply, %{"status" => "streaming"}, %{state | handler_state: new_handler_state}}
         {:error, error, new_handler_state} ->
           {:error, error, %{state | handler_state: new_handler_state}}
       end
@@ -464,11 +479,26 @@ defmodule Hermes.Server do
         nil ->
           {:error, %{code: -32602, message: "Tool not found: #{tool_id}"}, state}
         tool_module ->
-          case tool_module.handle(tool_params, context) do
-            {:ok, result} ->
-              {:reply, result, state}
-            {:error, reason} ->
-              {:error, %{code: -32603, message: reason}, state}
+          if is_streaming and function_exported?(tool_module, :handle_stream, 3) do
+            # Use streaming handler if available and streaming is requested
+            Task.start(fn ->
+              # Call the streaming handler
+              tool_module.handle_stream(tool_params, context, fn progress ->
+                # Send progress updates through the connection
+                send(context.connection_pid, {:send_progress, progress})
+              end)
+            end)
+            
+            # Return an immediate response indicating streaming has started
+            {:reply, %{"status" => "streaming"}, state}
+          else
+            # Fall back to regular handler
+            case tool_module.handle(tool_params, context) do
+              {:ok, result} ->
+                {:reply, result, state}
+              {:error, reason} ->
+                {:error, %{code: -32603, message: reason}, state}
+            end
           end
       end
     end
