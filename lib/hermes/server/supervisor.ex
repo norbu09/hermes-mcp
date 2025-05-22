@@ -79,7 +79,7 @@ defmodule Hermes.Server.Supervisor do
   - `{:error, reason}` - The server failed to start
   """
   def start_server(opts) do
-    name = Keyword.fetch!(opts, :name)
+    _name = Keyword.fetch!(opts, :name)
     
     # Create a child spec for the server
     child_spec = {Hermes.Server, opts}

@@ -371,14 +371,14 @@ defmodule Hermes.Server.AttributeParser do
       value == "false" -> false
       String.starts_with?(value, "[") and String.ends_with?(value, "]") ->
         value
-        |> String.slice(1..-2)
+        |> String.slice(1..-2//1)
         |> String.split(",")
         |> Enum.map(&String.trim/1)
         |> Enum.map(fn item ->
           # Remove quotes if present
           item = 
             if String.starts_with?(item, "\"") and String.ends_with?(item, "\"") do
-              String.slice(item, 1..-2)
+              String.slice(item, 1..String.length(item)-2)
             else
               item
             end
@@ -394,7 +394,7 @@ defmodule Hermes.Server.AttributeParser do
           end
         end)
       String.starts_with?(value, "\"") and String.ends_with?(value, "\"") ->
-        String.slice(value, 1..-2)
+        String.slice(value, 1..-2//1)
       true ->
         # Try to parse as number or keep as string
         case Integer.parse(value) do
