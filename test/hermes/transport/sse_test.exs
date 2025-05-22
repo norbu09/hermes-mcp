@@ -292,10 +292,17 @@ defmodule Hermes.Transport.SSETest do
       # Start a stub client
       {:ok, stub_client} = StubClient.start_link()
 
-      # Set up the SSE connection - bypass is needed but we don't assert
-      # any specific behavior since we're testing disconnection
-      Bypass.expect(bypass, fn conn ->
-        Plug.Conn.resp(conn, 200, "")
+      # Set up the SSE connection with a flag to track if the request was received
+      request_received = :ets.new(:request_tracker, [:set, :public])
+      :ets.insert(request_received, {:received, false})
+      
+      Bypass.expect_once(bypass, "GET", "/sse", fn conn ->
+        :ets.insert(request_received, {:received, true})
+        # Send a proper SSE response with headers
+        conn
+        |> Plug.Conn.put_resp_header("content-type", "text/event-stream")
+        |> Plug.Conn.put_resp_header("cache-control", "no-cache")
+        |> Plug.Conn.send_chunked(200)
       end)
 
       # Start the SSE transport with 0 reconnection attempts
@@ -309,14 +316,18 @@ defmodule Hermes.Transport.SSETest do
           transport_opts: [max_reconnections: 0]
         )
 
-      # Allow time for the initial connection attempt
-      Process.sleep(100)
+      # Wait for the connection to be established
+      :timer.sleep(200)
+      
+      # Verify the request was received
+      [{:received, was_received}] = :ets.lookup(request_received, :received)
+      assert was_received, "The SSE request was not received by the server"
 
       # Directly call shutdown on the transport to trigger clean termination
       SSE.shutdown(transport)
 
       # Give it a moment to shut down
-      Process.sleep(100)
+      :timer.sleep(100)
 
       # Verify the process is no longer alive
       refute Process.alive?(transport)

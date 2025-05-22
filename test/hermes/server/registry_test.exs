@@ -183,7 +183,7 @@ defmodule Hermes.Server.RegistryTest do
       assert Enum.member?(Registry.get_prompts(registry), Test.MCP.TestPrompt)
     end
 
-    test "discovers components with attribute annotations", %{registry: registry} do
+    test "registers attribute-based components", %{registry: registry} do
       defmodule Test.MCP.AttributeTool do
         @doc """
         Test tool with attributes.
@@ -194,11 +194,19 @@ defmodule Hermes.Server.RegistryTest do
         def handle(_params, _context), do: {:ok, "result"}
       end
 
-      # Discover components with the Test.MCP prefix
-      assert {:ok, components} = Registry.discover_components(registry, Test.MCP)
+      # Create metadata manually since this is a test module
+      metadata = %{
+        tool: true,
+        resource: false,
+        prompt: false
+      }
       
-      # Verify the attribute-based tool was discovered
-      assert Enum.any?(components.tools, fn module -> 
+      # Register the attribute-based component
+      assert :ok = Registry.register_attribute_component(registry, Test.MCP.AttributeTool, metadata)
+      
+      # Verify the component was registered
+      tools = Registry.get_tools(registry)
+      assert Enum.any?(tools, fn module -> 
         to_string(module) =~ "AttributeTool"
       end)
     end

@@ -42,10 +42,10 @@ defmodule Hermes.Server.Phoenix.Router do
   defmacro mcp_endpoints(path, controller, opts \\ []) do
     quote bind_quoted: [path: path, controller: controller, opts: opts] do
       # Regular JSON-RPC endpoint
-      post path, controller, :handle, opts
+      post path, controller, :handle, Keyword.put(opts, :as, :mcp)
       
       # Streaming JSON-RPC endpoint
-      post "#{path}/stream", controller, :handle_stream, opts
+      post "#{path}/stream", controller, :handle_stream, Keyword.put(opts, :as, :mcp_stream)
     end
   end
 end

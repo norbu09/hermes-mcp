@@ -519,24 +519,29 @@ defmodule Hermes.Server do
         :ok
     end
     
-    # Discover components using the registry
-    {:ok, %{tools: tools, resources: resources, prompts: prompts}} =
+    # First discover behavior-based components using the registry
+    {:ok, %{tools: _behavior_tools, resources: _behavior_resources, prompts: _behavior_prompts}} =
       Hermes.Server.Registry.discover_components(registry_name, state.module_prefix)
     
-    # Extract attribute-based components
-    attribute_components = discover_attribute_components(state.module_prefix)
+    # Then register attribute-based components explicitly
+    register_attribute_components(registry_name, state.module_prefix)
     
-    # Merge components from both sources
+    # Get all components from the registry
+    tools = Hermes.Server.Registry.get_tools(registry_name)
+    resources = Hermes.Server.Registry.get_resources(registry_name)
+    prompts = Hermes.Server.Registry.get_prompts(registry_name)
+    
+    # Update state with all components
     %{
       state |
-      tools: (state.tools ++ tools ++ attribute_components.tools) |> Enum.uniq(),
-      resources: (state.resources ++ resources ++ attribute_components.resources) |> Enum.uniq(),
-      prompts: (state.prompts ++ prompts ++ attribute_components.prompts) |> Enum.uniq()
+      tools: (state.tools ++ tools) |> Enum.uniq(),
+      resources: (state.resources ++ resources) |> Enum.uniq(),
+      prompts: (state.prompts ++ prompts) |> Enum.uniq()
     }
   end
   
-  # Discover components based on module attributes
-  defp discover_attribute_components(module_prefix) do
+  # Register attribute-based components with the registry
+  defp register_attribute_components(registry, module_prefix) do
     # Get all modules with the specified prefix
     modules =
       :code.all_loaded()
@@ -546,17 +551,15 @@ defmodule Hermes.Server do
         String.starts_with?(module_str, to_string(module_prefix))
       end)
     
-    # Extract components from module attributes
-    Enum.reduce(modules, %{tools: [], resources: [], prompts: []}, fn module, acc ->
+    # Register each module with attribute-based metadata
+    Enum.each(modules, fn module ->
       # Extract metadata using the attribute parser
       metadata = Hermes.Server.AttributeParser.extract_metadata(module)
       
-      # Add components to the accumulator
-      acc = if metadata.tool, do: update_in(acc.tools, &[module | &1]), else: acc
-      acc = if metadata.resource, do: update_in(acc.resources, &[module | &1]), else: acc
-      acc = if metadata.prompt, do: update_in(acc.prompts, &[module | &1]), else: acc
-      
-      acc
+      # Only register if the module has any MCP-related attributes
+      if metadata.tool or metadata.resource or metadata.prompt do
+        Hermes.Server.Registry.register_attribute_component(registry, module, metadata)
+      end
     end)
   end
   

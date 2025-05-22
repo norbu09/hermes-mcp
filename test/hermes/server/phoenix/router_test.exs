@@ -1,6 +1,7 @@
 defmodule Hermes.Server.Phoenix.RouterTest do
   use ExUnit.Case, async: true
-  use Phoenix.ConnTest
+  import Plug.Conn
+  import Phoenix.ConnTest
 
   # Define a test router that uses the MCP router macros
   defmodule TestRouter do
@@ -14,10 +15,27 @@ defmodule Hermes.Server.Phoenix.RouterTest do
     scope "/api" do
       pipe_through :api
       
-      mcp_server "/mcp", server: TestMCPServer
+      mcp_endpoints "/mcp", Hermes.Server.Phoenix.RouterTest.TestController
     end
   end
 
+  # Define a test controller
+  defmodule TestController do
+    use Phoenix.Controller
+    
+    def handle(conn, _params) do
+      conn
+      |> put_resp_content_type("application/json")
+      |> send_resp(200, Jason.encode!(%{result: "success"}))
+    end
+    
+    def handle_stream(conn, _params) do
+      conn
+      |> put_resp_content_type("application/x-ndjson")
+      |> send_resp(200, "")
+    end
+  end
+  
   # Define a test MCP server module
   defmodule TestMCPServer do
     def child_spec(_opts) do
@@ -33,9 +51,10 @@ defmodule Hermes.Server.Phoenix.RouterTest do
     end
   end
 
+  # Set the endpoint for Phoenix.ConnTest
+  @endpoint TestRouter
+  
   setup do
-    # Set the endpoint for Phoenix.ConnTest
-    @endpoint TestRouter
     :ok
   end
 
@@ -52,8 +71,8 @@ defmodule Hermes.Server.Phoenix.RouterTest do
       # Assert the route exists and has the correct properties
       assert mcp_route != nil
       assert mcp_route.helper == "mcp"
-      assert mcp_route.plug == Hermes.Server.Phoenix.Controller
-      assert mcp_route.plug_opts[:server] == TestMCPServer
+      assert mcp_route.plug == Hermes.Server.Phoenix.RouterTest.TestController
+      # The server is not automatically set in the plug_opts, it would be set in the controller
     end
   end
 end

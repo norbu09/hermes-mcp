@@ -114,6 +114,19 @@ defmodule Hermes.Server.Registry do
   end
   
   @doc """
+  Registers a component module with attribute-based metadata.
+  
+  ## Parameters
+  
+  - `registry` - The registry process (PID or name)
+  - `module` - The module to register
+  - `metadata` - The extracted metadata about the component
+  """
+  def register_attribute_component(registry \\ __MODULE__, module, metadata) do
+    GenServer.call(registry, {:register_attribute_component, module, metadata})
+  end
+
+  @doc """
   Discovers and registers components based on module attributes.
   
   This function scans all loaded modules for MCP component attributes
@@ -180,6 +193,34 @@ defmodule Hermes.Server.Registry do
     {:reply, state.prompts, state}
   end
   
+  def handle_call({:register_attribute_component, module, metadata}, _from, state) do
+    # Add the module to the appropriate collections based on its metadata
+    new_state = state
+    
+    # Register as a tool if applicable
+    new_state = if metadata.tool do
+      %{new_state | tools: [module | new_state.tools] |> Enum.uniq()}
+    else
+      new_state
+    end
+    
+    # Register as a resource if applicable
+    new_state = if metadata.resource do
+      %{new_state | resources: [module | new_state.resources] |> Enum.uniq()}
+    else
+      new_state
+    end
+    
+    # Register as a prompt if applicable
+    new_state = if metadata.prompt do
+      %{new_state | prompts: [module | new_state.prompts] |> Enum.uniq()}
+    else
+      new_state
+    end
+    
+    {:reply, :ok, new_state}
+  end
+
   def handle_call({:discover_components, module_prefix}, _from, state) do
     # Get all modules with the specified prefix
     modules =
@@ -187,8 +228,8 @@ defmodule Hermes.Server.Registry do
       |> Enum.map(fn {module, _} -> module end)
       |> filter_by_prefix(module_prefix)
     
-    # Discover components using both behavior and attribute-based approaches
-    # First, find modules implementing behaviors
+    # Discover components using behavior-based approach only
+    # Find modules implementing behaviors
     behavior_tools =
       modules
       |> Enum.filter(fn module ->
@@ -209,36 +250,16 @@ defmodule Hermes.Server.Registry do
         implements_behaviour?(module, Hermes.Server.Prompt)
       end)
     
-    # Now discover components using attribute-based approach
-    {attribute_tools, attribute_resources, attribute_prompts} =
-      modules
-      |> Enum.reduce({[], [], []}, fn module, {tools_acc, resources_acc, prompts_acc} ->
-        # Extract metadata using the attribute parser
-        metadata = Hermes.Server.AttributeParser.extract_metadata(module)
-        
-        # Add components to the appropriate accumulator
-        tools_acc = if metadata.tool, do: [module | tools_acc], else: tools_acc
-        resources_acc = if metadata.resource, do: [module | resources_acc], else: resources_acc
-        prompts_acc = if metadata.prompt, do: [module | prompts_acc], else: prompts_acc
-        
-        {tools_acc, resources_acc, prompts_acc}
-      end)
-    
-    # Combine components from both approaches
-    all_tools = (behavior_tools ++ attribute_tools) |> Enum.uniq()
-    all_resources = (behavior_resources ++ attribute_resources) |> Enum.uniq()
-    all_prompts = (behavior_prompts ++ attribute_prompts) |> Enum.uniq()
-    
     # Update state with discovered components
     new_state = %{
       state |
-      tools: (state.tools ++ all_tools) |> Enum.uniq(),
-      resources: (state.resources ++ all_resources) |> Enum.uniq(),
-      prompts: (state.prompts ++ all_prompts) |> Enum.uniq()
+      tools: (state.tools ++ behavior_tools) |> Enum.uniq(),
+      resources: (state.resources ++ behavior_resources) |> Enum.uniq(),
+      prompts: (state.prompts ++ behavior_prompts) |> Enum.uniq()
     }
     
     # Return the discovered components along with the updated state
-    result = %{tools: all_tools, resources: all_resources, prompts: all_prompts}
+    result = %{tools: behavior_tools, resources: behavior_resources, prompts: behavior_prompts}
     {:reply, {:ok, result}, new_state}
   end
   
