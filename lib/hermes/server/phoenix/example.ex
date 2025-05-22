@@ -193,7 +193,7 @@ defmodule Hermes.Server.Phoenix.Example do
         },
         %{
           "role" => "user",
-          "content" => "Hello, my name is #{name}."
+          "content" => "Hello, my name is \#{name}."
         }
       ]
       

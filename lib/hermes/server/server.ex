@@ -506,38 +506,58 @@ defmodule Hermes.Server do
   
   # Discover components based on module prefix
   defp discover_components(state) do
+    # Start the registry if not already started
+    registry_name = Module.concat(state.name, Registry)
+    
+    case Process.whereis(registry_name) do
+      nil ->
+        # Start the registry
+        {:ok, _pid} = Hermes.Server.Registry.start_link(name: registry_name)
+      
+      _pid ->
+        # Registry already started
+        :ok
+    end
+    
+    # Discover components using the registry
+    {:ok, %{tools: tools, resources: resources, prompts: prompts}} =
+      Hermes.Server.Registry.discover_components(registry_name, state.module_prefix)
+    
+    # Extract attribute-based components
+    attribute_components = discover_attribute_components(state.module_prefix)
+    
+    # Merge components from both sources
+    %{
+      state |
+      tools: (state.tools ++ tools ++ attribute_components.tools) |> Enum.uniq(),
+      resources: (state.resources ++ resources ++ attribute_components.resources) |> Enum.uniq(),
+      prompts: (state.prompts ++ prompts ++ attribute_components.prompts) |> Enum.uniq()
+    }
+  end
+  
+  # Discover components based on module attributes
+  defp discover_attribute_components(module_prefix) do
     # Get all modules with the specified prefix
     modules =
       :code.all_loaded()
       |> Enum.map(fn {module, _} -> module end)
       |> Enum.filter(fn module ->
         module_str = to_string(module)
-        String.starts_with?(module_str, to_string(state.module_prefix))
+        String.starts_with?(module_str, to_string(module_prefix))
       end)
     
-    # Discover tools
-    tools =
-      modules
-      |> Enum.filter(fn module ->
-        implements_behaviour?(module, Hermes.Server.Tool)
-      end)
-    
-    # Discover resources
-    resources =
-      modules
-      |> Enum.filter(fn module ->
-        implements_behaviour?(module, Hermes.Server.Resource)
-      end)
-    
-    # Discover prompts
-    prompts =
-      modules
-      |> Enum.filter(fn module ->
-        implements_behaviour?(module, Hermes.Server.Prompt)
-      end)
-    
-    # Update state with discovered components
-    %{state | tools: tools, resources: resources, prompts: prompts}
+    # Extract components from module attributes
+    Enum.reduce(modules, %{tools: [], resources: [], prompts: []}, fn module, acc ->
+      # Extract metadata using the attribute parser
+      metadata = Hermes.Server.AttributeParser.extract_metadata(module)
+      
+      # Add components to the accumulator
+      acc = if metadata.tool, do: update_in(acc.tools, &[module | &1]), else: acc
+      acc = if metadata.resource, do: update_in(acc.resources, &[module | &1]), else: acc
+      acc = if metadata.prompt, do: update_in(acc.prompts, &[module | &1]), else: acc
+      
+      acc
+    end)
   end
   
   # Add components to state
@@ -553,22 +573,5 @@ defmodule Hermes.Server do
     %{state | prompts: state.prompts ++ prompts}
   end
   
-  # Check if a module implements a behaviour
-  defp implements_behaviour?(module, behaviour) do
-    # Get the behaviours implemented by the module
-    behaviours =
-      case Code.ensure_loaded(module) do
-        {:module, _} ->
-          case module.module_info(:attributes) do
-            attributes when is_list(attributes) ->
-              Keyword.get(attributes, :behaviour, []) ++
-              Keyword.get(attributes, :behavior, [])
-            _ -> []
-          end
-        _ -> []
-      end
-    
-    # Check if the module implements the specified behaviour
-    Enum.member?(behaviours, behaviour)
-  end
+
 end

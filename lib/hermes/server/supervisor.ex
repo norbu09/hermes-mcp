@@ -48,11 +48,20 @@ defmodule Hermes.Server.Supervisor do
   def init(opts) do
     servers = Keyword.get(opts, :servers, [])
     
-    # Create child specs for each server
+    # Create child specs for each server and its registry
     children =
       servers
-      |> Enum.map(fn server_opts ->
-        {Hermes.Server, server_opts}
+      |> Enum.flat_map(fn server_opts ->
+        server_name = Keyword.fetch!(server_opts, :name)
+        registry_name = Module.concat(server_name, Registry)
+        
+        # Create child specs for both the registry and the server
+        [
+          # Registry spec
+          {Hermes.Server.Registry, name: registry_name},
+          # Server spec
+          {Hermes.Server, server_opts}
+        ]
       end)
     
     # Start the supervisor
