@@ -16,8 +16,7 @@ defmodule Hermes.Server do
       {Hermes.Server,
         name: MyApp.MCPServer,
         server_name: "My MCP Server",
-        version: "1.0.0",
-        module_prefix: MyApp.MCP
+        version: "1.0.0"
       }
     ]
     
@@ -30,7 +29,6 @@ defmodule Hermes.Server do
   - `:name` - The name to register the server process under (required)
   - `:server_name` - The human-readable name of the server (default: "Hermes MCP Server")
   - `:version` - The version of the server (default: "1.0.0")
-  - `:module_prefix` - The prefix for modules to scan for components
   - `:tools` - A list of modules implementing the `Hermes.Server.Tool` behavior
   - `:resources` - A list of modules implementing the `Hermes.Server.Resource` behavior
   - `:prompts` - A list of modules implementing the `Hermes.Server.Prompt` behavior
@@ -47,7 +45,6 @@ defmodule Hermes.Server do
     :name,
     :server_name,
     :version,
-    :module_prefix,
     :tools,
     :resources,
     :prompts,
@@ -80,18 +77,17 @@ defmodule Hermes.Server do
   def init(opts) do
     server_name = Keyword.get(opts, :server_name, "Hermes MCP Server")
     version = Keyword.get(opts, :version, "1.0.0")
-    module_prefix = Keyword.get(opts, :module_prefix)
-    tools = Keyword.get(opts, :tools, [])
-    resources = Keyword.get(opts, :resources, [])
-    prompts = Keyword.get(opts, :prompts, [])
     handler_module = Keyword.get(opts, :handler_module)
+
+    Registry.register(Hermes.Server.Registry, :tools, [])
+    Registry.register(Hermes.Server.Registry, :resources, [])
+    Registry.register(Hermes.Server.Registry, :prompts, [])
 
     # Initialize state
     state = %__MODULE__{
       name: Keyword.get(opts, :name),
       server_name: server_name,
       version: version,
-      module_prefix: module_prefix,
       tools: [],
       resources: [],
       prompts: [],
@@ -99,19 +95,6 @@ defmodule Hermes.Server do
       initialized: false,
       client_capabilities: nil
     }
-
-    # Discover components if module_prefix is provided
-    state =
-      if module_prefix do
-        discover_components(state)
-      else
-        state
-      end
-
-    # Add explicitly provided components
-    state = add_components(state, :tools, tools)
-    state = add_components(state, :resources, resources)
-    state = add_components(state, :prompts, prompts)
 
     # Initialize handler if provided
     state =
@@ -174,6 +157,12 @@ defmodule Hermes.Server do
       {:error, error, new_state} ->
         {:reply, {:error, error}, new_state}
     end
+  end
+
+  def handle_cast({:register, type, module}, state) do
+    res = Registry.update_value(Hermes.Server.Registry, type, &(&1 ++ [module]))
+    Logger.debug("Registering #{type}: #{inspect(res)}")
+    {:noreply, state}
   end
 
   # Process an MCP request
@@ -316,149 +305,154 @@ defmodule Hermes.Server do
 
   # Handle list_resources request
   defp handle_list_resources(params, context, state) do
-    if state.handler_module do
-      case state.handler_module.list_resources(context, params, state.handler_state) do
-        {:reply, resources, new_handler_state} ->
-          {:reply, %{"resources" => resources}, %{state | handler_state: new_handler_state}}
+    # if state.handler_module do
+    #   case state.handler_module.list_resources(context, params, state.handler_state) do
+    #     {:reply, resources, new_handler_state} ->
+    #       {:reply, %{"resources" => resources}, %{state | handler_state: new_handler_state}}
+    #
+    #     {:error, error, new_handler_state} ->
+    #       {:error, error, %{state | handler_state: new_handler_state}}
+    #   end
+    # else
+    # Default implementation
+    resources =
+      discover_components(:resources)
+      |> Enum.map(fn resource_module ->
+        %{
+          "id" => resource_module.uri(),
+          "name" => resource_module.name(),
+          "description" => resource_module.description(),
+          "mimeType" => resource_module.mime_type()
+        }
+      end)
 
-        {:error, error, new_handler_state} ->
-          {:error, error, %{state | handler_state: new_handler_state}}
-      end
-    else
-      # Default implementation
-      resources =
-        state.resources
-        |> Enum.map(fn resource_module ->
-          %{
-            "id" => resource_module.uri(),
-            "name" => resource_module.name(),
-            "description" => resource_module.description(),
-            "mimeType" => resource_module.mime_type()
-          }
-        end)
-
-      {:reply, %{"resources" => resources}, state}
-    end
+    {:reply, %{"resources" => resources}, state}
+    # end
   end
 
   # Handle get_resource request
   defp handle_get_resource(resource_id, params, context, state) do
-    if state.handler_module do
-      case state.handler_module.get_resource(context, resource_id, params, state.handler_state) do
-        {:reply, resource, new_handler_state} ->
-          {:reply, resource, %{state | handler_state: new_handler_state}}
+    # if state.handler_module do
+    #   case state.handler_module.get_resource(context, resource_id, params, state.handler_state) do
+    #     {:reply, resource, new_handler_state} ->
+    #       {:reply, resource, %{state | handler_state: new_handler_state}}
+    #
+    #     {:error, error, new_handler_state} ->
+    #       {:error, error, %{state | handler_state: new_handler_state}}
+    #   end
+    # else
+    # Default implementation
+    case Enum.find(discover_components(:resources), fn resource_module ->
+           resource_module.uri() == resource_id
+         end) do
+      nil ->
+        {:error, %{code: -32602, message: "Resource not found: #{resource_id}"}, state}
 
-        {:error, error, new_handler_state} ->
-          {:error, error, %{state | handler_state: new_handler_state}}
-      end
-    else
-      # Default implementation
-      case Enum.find(state.resources, fn resource_module ->
-             resource_module.uri() == resource_id
-           end) do
-        nil ->
-          {:error, %{code: -32602, message: "Resource not found: #{resource_id}"}, state}
+      resource_module ->
+        case resource_module.read(params, context) do
+          {:ok, content} ->
+            resource = %{
+              "id" => resource_module.uri(),
+              "name" => resource_module.name(),
+              "description" => resource_module.description(),
+              "mimeType" => resource_module.mime_type(),
+              "content" => content
+            }
 
-        resource_module ->
-          case resource_module.read(params, context) do
-            {:ok, content} ->
-              resource = %{
-                "id" => resource_module.uri(),
-                "name" => resource_module.name(),
-                "description" => resource_module.description(),
-                "mimeType" => resource_module.mime_type(),
-                "content" => content
-              }
+            {:reply, resource, state}
 
-              {:reply, resource, state}
-
-            {:error, reason} ->
-              {:error, %{code: -32603, message: reason}, state}
-          end
-      end
+          {:error, reason} ->
+            {:error, %{code: -32603, message: reason}, state}
+        end
     end
+
+    # end
   end
 
   # Handle list_prompts request
   defp handle_list_prompts(params, context, state) do
-    if state.handler_module do
-      case state.handler_module.list_prompts(context, params, state.handler_state) do
-        {:reply, prompts, new_handler_state} ->
-          {:reply, %{"prompts" => prompts}, %{state | handler_state: new_handler_state}}
+    # if state.handler_module do
+    #   case state.handler_module.list_prompts(context, params, state.handler_state) do
+    #     {:reply, prompts, new_handler_state} ->
+    #       {:reply, %{"prompts" => prompts}, %{state | handler_state: new_handler_state}}
+    #
+    #     {:error, error, new_handler_state} ->
+    #       {:error, error, %{state | handler_state: new_handler_state}}
+    #   end
+    # else
+    # Default implementation
 
-        {:error, error, new_handler_state} ->
-          {:error, error, %{state | handler_state: new_handler_state}}
-      end
-    else
-      # Default implementation
-      prompts =
-        state.prompts
-        |> Enum.map(fn prompt_module ->
-          %{
-            "id" => prompt_module.name(),
-            "name" => prompt_module.name(),
-            "description" => prompt_module.description(),
-            "arguments" => prompt_module.arguments()
-          }
-        end)
+    prompts =
+      discover_components(:promts)
+      |> Enum.map(fn prompt_module ->
+        %{
+          "id" => prompt_module.name(),
+          "name" => prompt_module.name(),
+          "description" => prompt_module.description(),
+          "arguments" => prompt_module.arguments()
+        }
+      end)
 
-      {:reply, %{"prompts" => prompts}, state}
-    end
+    {:reply, %{"prompts" => prompts}, state}
+    # end
   end
 
   # Handle get_prompt request
   defp handle_get_prompt(prompt_id, params, context, state) do
-    if state.handler_module do
-      case state.handler_module.get_prompt(context, prompt_id, params, state.handler_state) do
-        {:reply, prompt, new_handler_state} ->
-          {:reply, prompt, %{state | handler_state: new_handler_state}}
+    # if state.handler_module do
+    #   case state.handler_module.get_prompt(context, prompt_id, params, state.handler_state) do
+    #     {:reply, prompt, new_handler_state} ->
+    #       {:reply, prompt, %{state | handler_state: new_handler_state}}
+    #
+    #     {:error, error, new_handler_state} ->
+    #       {:error, error, %{state | handler_state: new_handler_state}}
+    #   end
+    # else
+    # Default implementation
+    case Enum.find(discover_components(:prompts), fn prompt_module ->
+           prompt_module.name() == prompt_id
+         end) do
+      nil ->
+        {:error, %{code: -32602, message: "Prompt not found: #{prompt_id}"}, state}
 
-        {:error, error, new_handler_state} ->
-          {:error, error, %{state | handler_state: new_handler_state}}
-      end
-    else
-      # Default implementation
-      case Enum.find(state.prompts, fn prompt_module -> prompt_module.name() == prompt_id end) do
-        nil ->
-          {:error, %{code: -32602, message: "Prompt not found: #{prompt_id}"}, state}
+      prompt_module ->
+        case prompt_module.get(params, context) do
+          {:ok, prompt_data} ->
+            {:reply, prompt_data, state}
 
-        prompt_module ->
-          case prompt_module.get(params, context) do
-            {:ok, prompt_data} ->
-              {:reply, prompt_data, state}
+          {:error, reason} ->
+            {:error, %{code: -32603, message: reason}, state}
+        end
 
-            {:error, reason} ->
-              {:error, %{code: -32603, message: reason}, state}
-          end
-      end
+        # end
     end
   end
 
   # Handle list_tools request
   defp handle_list_tools(params, context, state) do
-    if state.handler_module do
-      case state.handler_module.list_tools(context, params, state.handler_state) do
-        {:reply, tools, new_handler_state} ->
-          {:reply, %{"tools" => tools}, %{state | handler_state: new_handler_state}}
+    # if state.handler_module do
+    #   case state.handler_module.list_tools(context, params, state.handler_state) do
+    #     {:reply, tools, new_handler_state} ->
+    #       {:reply, %{"tools" => tools}, %{state | handler_state: new_handler_state}}
+    #
+    #     {:error, error, new_handler_state} ->
+    #       {:error, error, %{state | handler_state: new_handler_state}}
+    #   end
+    # else
+    # Default implementation
+    tools =
+      discover_components(:tools)
+      |> Enum.map(fn tool_module ->
+        %{
+          "id" => tool_module.name(),
+          "name" => tool_module.name(),
+          "description" => tool_module.description(),
+          "parameters" => tool_module.parameters()
+        }
+      end)
 
-        {:error, error, new_handler_state} ->
-          {:error, error, %{state | handler_state: new_handler_state}}
-      end
-    else
-      # Default implementation
-      tools =
-        state.tools
-        |> Enum.map(fn tool_module ->
-          %{
-            "id" => tool_module.name(),
-            "name" => tool_module.name(),
-            "description" => tool_module.description(),
-            "parameters" => tool_module.parameters()
-          }
-        end)
-
-      {:reply, %{"tools" => tools}, state}
-    end
+    {:reply, %{"tools" => tools}, state}
+    # end
   end
 
   # Handle execute_tool request
@@ -467,129 +461,66 @@ defmodule Hermes.Server do
     is_streaming = get_in(context.custom_data, [:streaming]) == true
     _client_id = get_in(context.custom_data, [:client_id])
 
-    if state.handler_module do
-      # Use the handler module if available
-      case state.handler_module.execute_tool(context, tool_id, tool_params, state.handler_state) do
-        {:reply, result, new_handler_state} ->
-          {:reply, result, %{state | handler_state: new_handler_state}}
+    # if state.handler_module do
+    #   # Use the handler module if available
+    #   case state.handler_module.execute_tool(context, tool_id, tool_params, state.handler_state) do
+    #     {:reply, result, new_handler_state} ->
+    #       {:reply, result, %{state | handler_state: new_handler_state}}
+    #
+    #     {:stream, stream_fn, new_handler_state} when is_streaming and is_function(stream_fn) ->
+    #       # Handle streaming response with the provided stream function
+    #       Task.start(fn ->
+    #         stream_fn.(fn progress ->
+    #           # Send progress updates through the connection
+    #           send(context.connection_pid, {:send_progress, progress})
+    #         end)
+    #       end)
+    #
+    #       # Return an immediate response indicating streaming has started
+    #       {:reply, %{"status" => "streaming"}, %{state | handler_state: new_handler_state}}
+    #
+    #     {:error, error, new_handler_state} ->
+    #       {:error, error, %{state | handler_state: new_handler_state}}
+    #   end
+    # else
+    # Default implementation
+    case Enum.find(discover_components(:tools), fn tool_module ->
+           tool_module.name() == tool_id
+         end) do
+      nil ->
+        {:error, %{code: -32602, message: "Tool not found: #{tool_id}"}, state}
 
-        {:stream, stream_fn, new_handler_state} when is_streaming and is_function(stream_fn) ->
-          # Handle streaming response with the provided stream function
+      tool_module ->
+        if is_streaming and function_exported?(tool_module, :handle_stream, 3) do
+          # Use streaming handler if available and streaming is requested
           Task.start(fn ->
-            stream_fn.(fn progress ->
+            # Call the streaming handler
+            tool_module.handle_stream(tool_params, context, fn progress ->
               # Send progress updates through the connection
               send(context.connection_pid, {:send_progress, progress})
             end)
           end)
 
           # Return an immediate response indicating streaming has started
-          {:reply, %{"status" => "streaming"}, %{state | handler_state: new_handler_state}}
+          {:reply, %{"status" => "streaming"}, state}
+        else
+          # Fall back to regular handler
+          case tool_module.handle(tool_params, context) do
+            {:ok, result} ->
+              {:reply, result, state}
 
-        {:error, error, new_handler_state} ->
-          {:error, error, %{state | handler_state: new_handler_state}}
-      end
-    else
-      # Default implementation
-      case Enum.find(state.tools, fn tool_module -> tool_module.name() == tool_id end) do
-        nil ->
-          {:error, %{code: -32602, message: "Tool not found: #{tool_id}"}, state}
-
-        tool_module ->
-          if is_streaming and function_exported?(tool_module, :handle_stream, 3) do
-            # Use streaming handler if available and streaming is requested
-            Task.start(fn ->
-              # Call the streaming handler
-              tool_module.handle_stream(tool_params, context, fn progress ->
-                # Send progress updates through the connection
-                send(context.connection_pid, {:send_progress, progress})
-              end)
-            end)
-
-            # Return an immediate response indicating streaming has started
-            {:reply, %{"status" => "streaming"}, state}
-          else
-            # Fall back to regular handler
-            case tool_module.handle(tool_params, context) do
-              {:ok, result} ->
-                {:reply, result, state}
-
-              {:error, reason} ->
-                {:error, %{code: -32603, message: reason}, state}
-            end
+            {:error, reason} ->
+              {:error, %{code: -32603, message: reason}, state}
           end
-      end
+        end
+
+        # end
     end
   end
 
-  # Discover components based on module prefix
-  defp discover_components(state) do
-    # Start the registry if not already started
-    registry_name = Module.concat(state.name, Registry)
-
-    case Process.whereis(registry_name) do
-      nil ->
-        # Start the registry
-        {:ok, _pid} = Hermes.Server.Registry.start_link(name: registry_name)
-
-      _pid ->
-        # Registry already started
-        :ok
-    end
-
-    # First discover behavior-based components using the registry
-    {:ok, %{tools: _behavior_tools, resources: _behavior_resources, prompts: _behavior_prompts}} =
-      Hermes.Server.Registry.discover_components(registry_name, state.module_prefix)
-
-    # Then register attribute-based components explicitly
-    register_attribute_components(registry_name, state.module_prefix)
-
-    # Get all components from the registry
-    tools = Hermes.Server.Registry.get_tools(registry_name)
-    resources = Hermes.Server.Registry.get_resources(registry_name)
-    prompts = Hermes.Server.Registry.get_prompts(registry_name)
-
-    # Update state with all components
-    %{
-      state
-      | tools: (state.tools ++ tools) |> Enum.uniq(),
-        resources: (state.resources ++ resources) |> Enum.uniq(),
-        prompts: (state.prompts ++ prompts) |> Enum.uniq()
-    }
-  end
-
-  # Register attribute-based components with the registry
-  defp register_attribute_components(registry, module_prefix) do
-    # Get all modules with the specified prefix
-    modules =
-      :code.all_loaded()
-      |> Enum.map(fn {module, _} -> module end)
-      |> Enum.filter(fn module ->
-        module_str = to_string(module)
-        String.starts_with?(module_str, to_string(module_prefix))
-      end)
-
-    # Register each module with attribute-based metadata
-    Enum.each(modules, fn module ->
-      # Extract metadata using the attribute parser
-      metadata = Hermes.Server.AttributeParser.extract_metadata(module)
-
-      # Only register if the module has any MCP-related attributes
-      if metadata.tool or metadata.resource or metadata.prompt do
-        Hermes.Server.Registry.register_attribute_component(registry, module, metadata)
-      end
-    end)
-  end
-
-  # Add components to state
-  defp add_components(state, :tools, tools) do
-    %{state | tools: state.tools ++ tools}
-  end
-
-  defp add_components(state, :resources, resources) do
-    %{state | resources: state.resources ++ resources}
-  end
-
-  defp add_components(state, :prompts, prompts) do
-    %{state | prompts: state.prompts ++ prompts}
+  # get components from the registry
+  def discover_components(type) do
+    [{_, components}] = Registry.lookup(Hermes.Server.Registry, type)
+    components
   end
 end

@@ -8,7 +8,8 @@ defmodule Hermes.Application do
   @impl true
   def start(_type, _args) do
     children = [
-      {Finch, name: Hermes.Finch, pools: %{default: [size: 15]}}
+      {Finch, name: Hermes.Finch, pools: %{default: [size: 15]}},
+      {Registry, keys: :unique, name: Hermes.Server.Registry}
     ]
 
     # See https://hexdocs.pm/elixir/Supervisor.html
